@@ -1974,3 +1974,1119 @@ Enterprise-Commerce-Microservices/
 Then explain the generated structure and wait for the next implementation phase.
 
 When proceeding to the next phase, preserve all previously established architecture and conventions.
+# 55. Explicit Service Boundaries and Ownership
+
+This section is **mandatory**.
+
+Every microservice must have a clearly defined business responsibility and must own its own data.
+
+The AI MUST NOT move business logic, database tables, or responsibilities between services simply to make implementation easier.
+
+---
+
+# 55.1 Service Ownership Matrix
+
+| Service                | Owns                                           | Database          | MUST NOT Own                       |
+| ---------------------- | ---------------------------------------------- | ----------------- | ---------------------------------- |
+| `api-gateway`          | Routing, gateway filters, external entry point | None              | Business data                      |
+| `config-server`        | Central configuration                          | Config repository | Business data                      |
+| `discovery-server`     | Service registration/discovery                 | None              | Business data                      |
+| `auth-service`         | Authentication, credentials, JWT, roles        | `auth_db`         | Product/order/payment data         |
+| `user-service`         | Customer profile, addresses, preferences       | `user_db`         | Passwords, orders, payments        |
+| `product-service`      | Products, categories, brands, product metadata | `product_db`      | Inventory quantity, orders         |
+| `cart-service`         | Shopping carts and cart items                  | `cart_db`         | Orders, payments, inventory        |
+| `order-service`        | Orders and order lifecycle                     | `order_db`        | Payment records, inventory records |
+| `payment-service`      | Payments, transactions, refunds                | `payment_db`      | Orders, product catalog            |
+| `inventory-service`    | Stock, reservations, warehouses                | `inventory_db`    | Product descriptions, orders       |
+| `notification-service` | Notifications and notification processing      | `notification_db` | User authentication                |
+| `analytics-service`    | Reporting/read models/analytics                | `analytics_db`    | Source-of-truth business data      |
+
+---
+
+# 55.2 Auth Service Boundary
+
+## Owns
+
+```text
+User authentication
+Login
+Registration credentials
+Password hash
+JWT
+Refresh tokens
+Roles
+Permissions
+Account authentication status
+```
+
+Database:
+
+```text
+auth_db
+```
+
+Example tables:
+
+```text
+users_credentials
+roles
+permissions
+user_roles
+refresh_tokens
+```
+
+## Does NOT own
+
+```text
+Customer profile
+Customer address
+Customer order history
+Payment information
+Product information
+Cart information
+Inventory
+```
+
+Those belong to other services.
+
+---
+
+# 55.3 User Service Boundary
+
+## Owns
+
+```text
+Customer profile
+First name
+Last name
+Phone
+Email profile information
+Addresses
+Preferences
+```
+
+Database:
+
+```text
+user_db
+```
+
+Example tables:
+
+```text
+user_profiles
+addresses
+user_preferences
+```
+
+## Does NOT own
+
+```text
+Password
+JWT
+Roles
+Payments
+Orders
+Cart
+Products
+Inventory
+```
+
+Authentication information belongs to `auth-service`.
+
+---
+
+# 55.4 Product Service Boundary
+
+## Owns
+
+```text
+Product catalog
+Product name
+Description
+SKU
+Category
+Brand
+Product images metadata
+Product specifications
+Base price
+Product status
+```
+
+Database:
+
+```text
+product_db
+```
+
+Example:
+
+```text
+products
+categories
+brands
+product_images
+product_attributes
+```
+
+## Does NOT own
+
+```text
+Available stock
+Reserved stock
+Warehouse stock
+Cart quantity
+Orders
+Payments
+Customer information
+```
+
+Inventory belongs to `inventory-service`.
+
+---
+
+# 55.5 Cart Service Boundary
+
+## Owns
+
+```text
+Shopping cart
+Cart items
+Selected quantity
+Cart state
+Cart calculations
+```
+
+Database:
+
+```text
+cart_db
+```
+
+Example:
+
+```text
+carts
+cart_items
+```
+
+## Does NOT own
+
+```text
+Product master data
+Inventory
+Orders
+Payments
+Customer credentials
+```
+
+When product information is required, communicate with `product-service`.
+
+When stock information is required, communicate with `inventory-service`.
+
+---
+
+# 55.6 Order Service Boundary
+
+`order-service` owns the **order business lifecycle**.
+
+## Owns
+
+```text
+Order
+Order items snapshot
+Order status
+Order total
+Shipping address snapshot
+Order timestamps
+Cancellation
+Order state transitions
+```
+
+Database:
+
+```text
+order_db
+```
+
+Example tables:
+
+```text
+orders
+order_items
+order_status_history
+```
+
+## Order lifecycle
+
+```text
+CREATED
+    ↓
+PAYMENT_PENDING
+    ↓
+PAID
+    ↓
+INVENTORY_PENDING
+    ↓
+CONFIRMED
+    ↓
+SHIPPED
+    ↓
+DELIVERED
+```
+
+Possible failure:
+
+```text
+FAILED
+CANCELLED
+```
+
+## Does NOT own
+
+```text
+Payment transaction records
+Inventory stock
+Product master data
+Customer credentials
+```
+
+Those belong to other services.
+
+---
+
+# 55.7 Payment Service Boundary
+
+`payment-service` owns all payment-related information.
+
+## Owns
+
+```text
+Payment
+Transaction
+Payment status
+Payment provider reference
+Refund
+Refund status
+Payment failure information
+```
+
+Database:
+
+```text
+payment_db
+```
+
+Example:
+
+```text
+payments
+payment_transactions
+refunds
+```
+
+## Does NOT own
+
+```text
+Order lifecycle
+Product information
+Inventory
+Customer password
+Shopping cart
+```
+
+The Payment Service may receive an `orderId`, but it must not directly modify the Order database.
+
+---
+
+# 55.8 Inventory Service Boundary
+
+`inventory-service` is the **only service responsible for stock quantities**.
+
+## Owns
+
+```text
+Stock
+Available quantity
+Reserved quantity
+Warehouse
+Inventory reservation
+Inventory release
+Restocking
+Stock adjustments
+```
+
+Database:
+
+```text
+inventory_db
+```
+
+Example:
+
+```text
+inventory
+inventory_reservations
+warehouses
+stock_movements
+```
+
+## Important rule
+
+No other service may directly modify:
+
+```text
+available_stock
+reserved_stock
+warehouse_stock
+```
+
+For example:
+
+```text
+Order Service
+     X
+     |
+     X direct database update
+     |
+inventory_db
+```
+
+This is forbidden.
+
+Correct:
+
+```text
+Order Service
+      |
+      | REST / Kafka
+      ↓
+Inventory Service
+      |
+      ↓
+inventory_db
+```
+
+---
+
+# 55.9 Notification Service Boundary
+
+`notification-service` owns notification processing.
+
+## Owns
+
+```text
+Email notifications
+SMS notifications
+Push notifications
+Notification templates
+Notification status
+Notification history
+```
+
+Database:
+
+```text
+notification_db
+```
+
+Example:
+
+```text
+notifications
+notification_templates
+notification_delivery_attempts
+```
+
+It must NOT contain core order/payment/product business logic.
+
+---
+
+# 55.10 Analytics Service Boundary
+
+`analytics-service` owns analytics-specific read models.
+
+It should receive business events from Kafka.
+
+Example:
+
+```text
+OrderCreated
+PaymentCompleted
+OrderCancelled
+ProductViewed
+InventoryReserved
+```
+
+Then build analytics data.
+
+Database:
+
+```text
+analytics_db
+```
+
+Example:
+
+```text
+daily_sales
+product_sales
+payment_metrics
+order_metrics
+customer_activity
+```
+
+Analytics data is **not the source of truth** for orders, payments, or inventory.
+
+---
+
+# 55.11 API Gateway Boundary
+
+The API Gateway is infrastructure, not a business service.
+
+## Owns
+
+```text
+Routing
+Authentication filters
+Authorization filters
+CORS
+Rate limiting
+Request correlation
+Gateway-level logging
+```
+
+## Does NOT own
+
+```text
+Product business logic
+Order business logic
+Payment business logic
+Inventory business logic
+Database repositories
+Business transactions
+```
+
+Do not create:
+
+```text
+ProductRepository
+OrderRepository
+PaymentRepository
+```
+
+inside the API Gateway.
+
+---
+
+# 55.12 Config Server Boundary
+
+Config Server owns centralized configuration.
+
+It may provide:
+
+```text
+Database configuration
+Kafka configuration
+RabbitMQ configuration
+Redis configuration
+Service URLs
+Logging configuration
+Feature flags
+```
+
+It must NOT contain business logic.
+
+---
+
+# 55.13 Discovery Server Boundary
+
+Discovery Server only manages service registration/discovery.
+
+Example:
+
+```text
+ORDER-SERVICE
+PAYMENT-SERVICE
+PRODUCT-SERVICE
+INVENTORY-SERVICE
+```
+
+It must not contain business logic.
+
+---
+
+# 56. Database Ownership Rules
+
+This is a **hard architectural rule**.
+
+Each service owns its database.
+
+```text
+auth-service
+     ↓
+auth_db
+
+user-service
+     ↓
+user_db
+
+product-service
+     ↓
+product_db
+
+cart-service
+     ↓
+cart_db
+
+order-service
+     ↓
+order_db
+
+payment-service
+     ↓
+payment_db
+
+inventory-service
+     ↓
+inventory_db
+
+notification-service
+     ↓
+notification_db
+
+analytics-service
+     ↓
+analytics_db
+```
+
+A service may only read/write its own database.
+
+---
+
+# 57. Forbidden Database Communication
+
+Never implement:
+
+```text
+order-service
+      ↓
+SELECT *
+FROM payment_db.payments
+```
+
+Never implement:
+
+```text
+product-service
+      ↓
+UPDATE inventory_db.inventory
+```
+
+Never implement:
+
+```text
+payment-service
+      ↓
+UPDATE order_db.orders
+```
+
+Never implement cross-service database joins.
+
+---
+
+# 58. Correct Cross-Service Communication
+
+If Order Service needs payment information:
+
+```text
+Order Service
+      |
+      | REST
+      ↓
+Payment Service
+      |
+      ↓
+payment_db
+```
+
+If Inventory needs to react to a payment:
+
+```text
+Payment Service
+      |
+      | PaymentCompleted
+      ↓
+Kafka
+      |
+      ↓
+Inventory Service
+      |
+      ↓
+inventory_db
+```
+
+If Notification needs to send an email:
+
+```text
+Notification Service
+      |
+      ↓
+RabbitMQ
+      |
+      ↓
+Email Worker
+```
+
+---
+
+# 59. Ownership of Business Decisions
+
+The service that owns the business concept must own the decision-making logic.
+
+Examples:
+
+## Payment
+
+Only Payment Service decides:
+
+```text
+SUCCESS
+FAILED
+REFUNDED
+```
+
+Order Service must not directly change payment status in the Payment database.
+
+---
+
+## Inventory
+
+Only Inventory Service decides:
+
+```text
+AVAILABLE
+RESERVED
+OUT_OF_STOCK
+RELEASED
+```
+
+Order Service must not directly update inventory quantities.
+
+---
+
+## Order
+
+Only Order Service decides the order lifecycle:
+
+```text
+CREATED
+PAID
+CONFIRMED
+SHIPPED
+DELIVERED
+CANCELLED
+```
+
+Payment Service must not directly update the order database.
+
+---
+
+# 60. Data Ownership vs Data Reference
+
+A service can store a reference to another service's entity.
+
+For example:
+
+```text
+Order
+------------------
+id
+userId
+paymentId
+```
+
+This does NOT mean Order Service owns User or Payment.
+
+It only references them.
+
+Similarly:
+
+```text
+OrderItem
+------------------
+id
+productId
+productName
+unitPrice
+quantity
+```
+
+The order can store a **snapshot** of important product information at order time.
+
+Product Service remains the owner of the product catalog.
+
+---
+
+# 61. Avoid Distributed Entity Models
+
+Do not attempt to create one Java entity shared across all services.
+
+Forbidden:
+
+```text
+common-model/
+    User.java
+    Product.java
+    Order.java
+```
+
+and then import those JPA entities into every service.
+
+Each service should define its own internal domain model.
+
+For example:
+
+```text
+product-service
+    ProductEntity
+
+order-service
+    OrderItemEntity
+```
+
+They can have different representations of the same business concept when required.
+
+---
+
+# 62. Service Communication Ownership
+
+Use this communication map:
+
+```text
+Frontend
+   |
+   | REST
+   ↓
+API Gateway
+   |
+   +---- REST ----> Auth Service
+   |
+   +---- REST ----> User Service
+   |
+   +---- REST ----> Product Service
+   |
+   +---- REST ----> Cart Service
+   |
+   +---- REST ----> Order Service
+```
+
+Internal synchronous communication:
+
+```text
+Order Service
+      |
+      | REST / OpenFeign
+      ↓
+Payment Service
+```
+
+Event-driven communication:
+
+```text
+Payment Service
+      |
+      ↓
+    Kafka
+      |
+      +----> Order Service
+      +----> Inventory Service
+      +----> Notification Service
+      +----> Analytics Service
+```
+
+Asynchronous jobs:
+
+```text
+Notification Service
+      |
+      ↓
+  RabbitMQ
+      |
+      +----> Email Worker
+      +----> SMS Worker
+      +----> Invoice Worker
+```
+
+---
+
+# 63. Kafka Ownership
+
+Kafka is infrastructure for event communication.
+
+No service should treat Kafka as another database.
+
+Kafka events should represent business events such as:
+
+```text
+OrderCreated
+PaymentCompleted
+PaymentFailed
+InventoryReserved
+InventoryReleased
+OrderConfirmed
+OrderCancelled
+OrderShipped
+```
+
+Events should contain enough information for consumers to process them without accessing another service's database directly.
+
+---
+
+# 64. RabbitMQ Ownership
+
+RabbitMQ is infrastructure for asynchronous message processing.
+
+Use it for:
+
+```text
+SendEmail
+SendSMS
+GenerateInvoice
+ProcessNotification
+```
+
+Do not use RabbitMQ simply because it is available.
+
+Every queue must have a documented business purpose.
+
+---
+
+# 65. Service Dependency Rules
+
+Avoid circular dependencies.
+
+Bad:
+
+```text
+Order Service
+     ↓
+Payment Service
+     ↓
+Order Service
+```
+
+If both services require asynchronous state changes, use events.
+
+Example:
+
+```text
+Order Service
+     |
+     ↓
+Payment Service
+     |
+     ↓
+Kafka
+     |
+     ↓
+Order Service
+```
+
+This creates a more manageable asynchronous workflow.
+
+---
+
+# 66. Service Boundary Decision Rule
+
+Before adding any class, table, API, or business rule, ask:
+
+> "Which service owns this business capability?"
+
+Use this decision table:
+
+```text
+Authentication?
+        ↓
+Auth Service
+
+Customer profile?
+        ↓
+User Service
+
+Product catalog?
+        ↓
+Product Service
+
+Shopping cart?
+        ↓
+Cart Service
+
+Order lifecycle?
+        ↓
+Order Service
+
+Payment?
+        ↓
+Payment Service
+
+Stock?
+        ↓
+Inventory Service
+
+Email/SMS/Push?
+        ↓
+Notification Service
+
+Reports/analytics?
+        ↓
+Analytics Service
+```
+
+---
+
+# 67. Final Ownership Diagram
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                    API GATEWAY                          │
+│                 Routing / Security                      │
+└─────────────────────────┬───────────────────────────────┘
+                          │
+       ┌──────────────────┼─────────────────────┐
+       │                  │                     │
+       ▼                  ▼                     ▼
+┌─────────────┐    ┌─────────────┐      ┌──────────────┐
+│ Auth        │    │ User        │      │ Product      │
+│ Service     │    │ Service     │      │ Service      │
+└──────┬──────┘    └──────┬──────┘      └──────┬───────┘
+       │                  │                    │
+       ▼                  ▼                    ▼
+   auth_db             user_db             product_db
+
+                          │
+                          ▼
+                   ┌─────────────┐
+                   │ Cart        │
+                   │ Service     │
+                   └──────┬──────┘
+                          │
+                          ▼
+                   ┌─────────────┐
+                   │ Order       │
+                   │ Service     │
+                   └──────┬──────┘
+                          │
+                 ┌────────┴────────┐
+                 │                 │
+                REST              Kafka
+                 │                 │
+                 ▼                 ▼
+          ┌─────────────┐    ┌──────────────┐
+          │ Payment     │    │ Event        │
+          │ Service     │    │ Consumers    │
+          └──────┬──────┘    └──────┬───────┘
+                 │                   │
+                 ▼          ┌────────┼────────┐
+            payment_db      ▼        ▼        ▼
+                       Inventory  Notification Analytics
+                         Service    Service     Service
+                           │          │           │
+                           ▼          ▼           ▼
+                     inventory_db notification_db analytics_db
+                                      │
+                                      ▼
+                                  RabbitMQ
+                                  /      \
+                                 ↓        ↓
+                              Email      SMS
+                              Worker    Worker
+```
+
+---
+
+# 68. Non-Negotiable Rules
+
+The AI MUST reject its own implementation approach if it violates any of these rules:
+
+```text
+1. No shared business database.
+
+2. No service directly modifying another service's database.
+
+3. No shared JPA entities between services.
+
+4. No business logic in API Gateway.
+
+5. No payment logic in Order Service.
+
+6. No inventory logic in Order Service.
+
+7. No order lifecycle logic in Payment Service.
+
+8. No product catalog ownership in Inventory Service.
+
+9. No authentication credential ownership in User Service.
+
+10. No business analytics as the source of truth.
+
+11. No Kafka topic created without a documented business purpose.
+
+12. No RabbitMQ queue created without a documented processing purpose.
+
+13. No REST call where asynchronous event processing is intentionally required.
+
+14. No Kafka usage where an immediate synchronous response is required.
+
+15. Every service must be independently buildable.
+
+16. Every service must be independently deployable.
+
+17. Every service must clearly document what it owns.
+
+18. Every cross-service dependency must be documented.
+
+19. Every business event must have a defined producer and consumer.
+
+20. Every database must have one clear owning service.
+```
+
+---
+
+# 69. AI Self-Check Before Completing Each Service
+
+Before declaring a service complete, answer:
+
+```text
+1. What business capability does this service own?
+
+2. What database does it own?
+
+3. Which tables does it own?
+
+4. Which APIs does it expose?
+
+5. Which services does it call?
+
+6. Which Kafka events does it publish?
+
+7. Which Kafka events does it consume?
+
+8. Which RabbitMQ queues does it publish to?
+
+9. Which RabbitMQ queues does it consume?
+
+10. Which business decisions belong exclusively to this service?
+
+11. Is another service accessing this service's database directly?
+
+12. Is this service accidentally implementing another service's business logic?
+
+13. Can this service be built independently?
+
+14. Can this service be deployed independently?
+
+15. Are the boundaries documented?
+```
+
+If any answer is unclear, stop implementation and clarify the boundary before continuing.

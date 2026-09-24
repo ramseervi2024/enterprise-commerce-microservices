@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Order Service</title>
+</head>
+<body>
+    <h2>Your Orders</h2>
+    <form action="/orders/place" method="post">
+        <button type="submit">Place New Order</button>
+    </form>
+    <br/>
+    <table border="1">
+        <tr>
+            <th>Order ID</th>
+            <th>Status</th>
+        </tr>
+        <tr th:each="order : ${orders}">
+            <td th:text="${order.id}">1</td>
+            <td th:text="${order.status}">CREATED</td>
+        </tr>
+    </table>
+</body>
+</html>
